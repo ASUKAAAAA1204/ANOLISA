@@ -94,6 +94,10 @@ jobs:
       cosh_ng: ${{ steps.changes.outputs.cosh_ng }}
       ktuner: ${{ steps.changes.outputs.ktuner }}
       blaze: ${{ steps.changes.outputs.blaze }}
+      cache_environment: >-
+        ${{ github.ref == 'refs/heads/main' && github.ref_protected &&
+            (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+            'ci-sccache-writer' || 'ci-sccache-reader' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -159,6 +163,12 @@ jobs:
           fi
           if echo "$CHANGED" | grep -q "^src/blaze/"; then
             BLAZE=true
+          fi
+
+          # Exercise cache consumers when the runner image or cache bootstrap changes.
+          if echo "$CHANGED" | grep -Eq '^\.github/actions/setup-sccache/|^\.github/runner-images/ubuntu22-ci/|^\.github/workflows/ci\.yaml$'; then
+            TOKENLESS=true
+            AGENT_MEMORY=true
           fi
 
           # Manual override via workflow_dispatch
@@ -362,6 +372,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.agent_sec_core == 'true'
     runs-on: anolisa-k8s-general-ci-x64
+    environment: ${{ needs.detect-changes.outputs.cache_environment }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -380,8 +391,15 @@ jobs:
         with:
           python-version: '3.11.6'
 
+      - name: Configure trusted compiler cache writes
+        if: needs.detect-changes.outputs.cache_environment == 'ci-sccache-writer'
+        uses: ./.github/actions/setup-sccache
+        with:
+          writer-password: ${{ secrets.CI_SCCACHE_REDIS_WRITER_PASSWORD }}
+
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-bin: false
           workspaces: src/agent-sec-core/linux-sandbox
 
       - name: Install system dependencies
@@ -681,6 +699,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-bin: false
           workspaces: src/agentsight
 
       - name: astral-sh/setup-uv
@@ -846,6 +865,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.tokenless == 'true'
     runs-on: anolisa-k8s-general-ci-x64
+    environment: ${{ needs.detect-changes.outputs.cache_environment }}
     steps:
       - uses: actions/checkout@v4
 
@@ -854,8 +874,15 @@ jobs:
           toolchain: '1.89.0'
           components: 'rustfmt, clippy'
 
+      - name: Configure trusted compiler cache writes
+        if: needs.detect-changes.outputs.cache_environment == 'ci-sccache-writer'
+        uses: ./.github/actions/setup-sccache
+        with:
+          writer-password: ${{ secrets.CI_SCCACHE_REDIS_WRITER_PASSWORD }}
+
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-bin: false
           workspaces: |
             src/tokenless
             src/tokenless/benchmark/l1-compressor
@@ -1024,6 +1051,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.ws_ckpt == 'true'
     runs-on: anolisa-k8s-general-ci-x64
+    environment: ${{ needs.detect-changes.outputs.cache_environment }}
     steps:
       - uses: actions/checkout@v4
 
@@ -1031,8 +1059,15 @@ jobs:
         with:
           components: 'rustfmt, clippy'
 
+      - name: Configure trusted compiler cache writes
+        if: needs.detect-changes.outputs.cache_environment == 'ci-sccache-writer'
+        uses: ./.github/actions/setup-sccache
+        with:
+          writer-password: ${{ secrets.CI_SCCACHE_REDIS_WRITER_PASSWORD }}
+
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-bin: false
           workspaces: src/ws-ckpt/src
 
       - name: Install system dependencies
@@ -1075,7 +1110,10 @@ jobs:
       # ── Rust coverage gate ──────────────────────────────────────────────
       - name: Rust coverage gate (≥45%)
         run: |
-          cargo install cargo-tarpaulin --version 0.37.2 --locked
+          if [[ "$(cargo tarpaulin --version)" != *' 0.37.2' ]]; then
+            echo '::error::Runner image must provide cargo-tarpaulin 0.37.2'
+            exit 1
+          fi
           cd src/ws-ckpt/src
           cargo tarpaulin --workspace --out Stdout --fail-under 45
 
@@ -1106,6 +1144,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.agent_memory == 'true'
     runs-on: anolisa-k8s-general-ci-x64
+    environment: ${{ needs.detect-changes.outputs.cache_environment }}
     steps:
       - uses: actions/checkout@v4
 
@@ -1123,8 +1162,15 @@ jobs:
           toolchain: '1.89.0'
           components: 'rustfmt, clippy'
 
+      - name: Configure trusted compiler cache writes
+        if: needs.detect-changes.outputs.cache_environment == 'ci-sccache-writer'
+        uses: ./.github/actions/setup-sccache
+        with:
+          writer-password: ${{ secrets.CI_SCCACHE_REDIS_WRITER_PASSWORD }}
+
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-bin: false
           workspaces: src/agent-memory
 
       - name: Install system dependencies
@@ -1166,6 +1212,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.anolisa == 'true'
     runs-on: anolisa-k8s-general-ci-x64
+    environment: ${{ needs.detect-changes.outputs.cache_environment }}
     steps:
       - uses: actions/checkout@v4
 
@@ -1177,8 +1224,15 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
+      - name: Configure trusted compiler cache writes
+        if: needs.detect-changes.outputs.cache_environment == 'ci-sccache-writer'
+        uses: ./.github/actions/setup-sccache
+        with:
+          writer-password: ${{ secrets.CI_SCCACHE_REDIS_WRITER_PASSWORD }}
+
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-bin: false
           workspaces: distribution/anolisa
 
       - uses: actions/setup-node@v4
@@ -1279,6 +1333,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.skillfs == 'true'
     runs-on: anolisa-k8s-general-ci-x64
+    environment: ${{ needs.detect-changes.outputs.cache_environment }}
     steps:
       - uses: actions/checkout@v4
 
@@ -1287,8 +1342,15 @@ jobs:
           toolchain: '1.86.0'
           components: 'rustfmt, clippy'
 
+      - name: Configure trusted compiler cache writes
+        if: needs.detect-changes.outputs.cache_environment == 'ci-sccache-writer'
+        uses: ./.github/actions/setup-sccache
+        with:
+          writer-password: ${{ secrets.CI_SCCACHE_REDIS_WRITER_PASSWORD }}
+
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-bin: false
           workspaces: src/skillfs
 
       - name: Install system dependencies
@@ -1329,6 +1391,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.cosh_ng == 'true'
     runs-on: anolisa-k8s-general-ci-x64
+    environment: ${{ needs.detect-changes.outputs.cache_environment }}
     timeout-minutes: 15
     env:
       # This override takes precedence over the workspace's `stable` channel.
@@ -1338,8 +1401,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@1.88.0
 
+      - name: Configure trusted compiler cache writes
+        if: needs.detect-changes.outputs.cache_environment == 'ci-sccache-writer'
+        uses: ./.github/actions/setup-sccache
+        with:
+          writer-password: ${{ secrets.CI_SCCACHE_REDIS_WRITER_PASSWORD }}
+
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-bin: false
           workspaces: src/cosh-ng
 
       - name: Install system dependencies
@@ -1368,6 +1438,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.cosh_ng == 'true'
     runs-on: anolisa-k8s-general-ci-x64
+    environment: ${{ needs.detect-changes.outputs.cache_environment }}
     env:
       # Keep lint upgrades explicit; this overrides the workspace's `stable` channel.
       RUSTUP_TOOLCHAIN: '1.97.1'
@@ -1382,8 +1453,15 @@ jobs:
         with:
           components: 'rustfmt, clippy'
 
+      - name: Configure trusted compiler cache writes
+        if: needs.detect-changes.outputs.cache_environment == 'ci-sccache-writer'
+        uses: ./.github/actions/setup-sccache
+        with:
+          writer-password: ${{ secrets.CI_SCCACHE_REDIS_WRITER_PASSWORD }}
+
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-bin: false
           workspaces: src/cosh-ng
 
       - name: Install system dependencies
@@ -1419,6 +1497,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.cosh_ng == 'true'
     runs-on: anolisa-k8s-general-ci-x64
+    environment: ${{ needs.detect-changes.outputs.cache_environment }}
     env:
       RUSTUP_TOOLCHAIN: '1.88.0'
     steps:
@@ -1426,8 +1505,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@1.88.0
 
+      - name: Configure trusted compiler cache writes
+        if: needs.detect-changes.outputs.cache_environment == 'ci-sccache-writer'
+        uses: ./.github/actions/setup-sccache
+        with:
+          writer-password: ${{ secrets.CI_SCCACHE_REDIS_WRITER_PASSWORD }}
+
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-bin: false
           workspaces: src/cosh-ng
 
       - name: Install system dependencies
@@ -1448,6 +1534,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.ktuner == 'true'
     runs-on: anolisa-k8s-general-ci-x64
+    environment: ${{ needs.detect-changes.outputs.cache_environment }}
     steps:
       - uses: actions/checkout@v4
 
@@ -1456,8 +1543,15 @@ jobs:
           toolchain: '1.89.0'
           components: 'rustfmt, clippy'
 
+      - name: Configure trusted compiler cache writes
+        if: needs.detect-changes.outputs.cache_environment == 'ci-sccache-writer'
+        uses: ./.github/actions/setup-sccache
+        with:
+          writer-password: ${{ secrets.CI_SCCACHE_REDIS_WRITER_PASSWORD }}
+
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-bin: false
           workspaces: src/ktuner
 
       - name: Check formatting
@@ -1483,6 +1577,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.blaze == 'true'
     runs-on: anolisa-k8s-general-ci-x64
+    environment: ${{ needs.detect-changes.outputs.cache_environment }}
     steps:
       - uses: actions/checkout@v4
 
@@ -1491,8 +1586,15 @@ jobs:
           toolchain: '1.88.0'
           components: 'rustfmt, clippy'
 
+      - name: Configure trusted compiler cache writes
+        if: needs.detect-changes.outputs.cache_environment == 'ci-sccache-writer'
+        uses: ./.github/actions/setup-sccache
+        with:
+          writer-password: ${{ secrets.CI_SCCACHE_REDIS_WRITER_PASSWORD }}
+
       - uses: Swatinem/rust-cache@v2
         with:
+          cache-bin: false
           workspaces: src/blaze
 
       - name: Check formatting
