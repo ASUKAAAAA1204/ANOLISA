@@ -15,6 +15,25 @@ Before changing documentation, read
 source of truth for file placement, bilingual names, and documentation
 updates.
 
+## Recommended contribution directions
+
+If you are looking for a contribution direction, we recommend starting with the
+component topics in [Community Roadmap](https://github.com/agentic-os-org/ANOLISA/discussions/categories/community-roadmap).
+Bug reports, bug fixes, and other Issues and PRs are also welcome.
+
+Roadmap topics are candidate directions, not scheduling commitments or tasks
+available to claim. To implement a roadmap direction, follow the Issue process:
+
+1. Search for an existing Issue covering the direction. If none exists, open an
+   Issue linking to the source Discussion and describe the proposed scope.
+2. Confirm the current version, scope, and acceptance criteria with the component
+   owner before starting implementation.
+3. Once the Issue is ready to claim, follow the existing
+   [community claiming process](.github/TRIAGE.md#claiming-community-work) and
+   comment `/claim` on the Issue.
+4. Implement the agreed scope and submit a PR linking to the Issue. Use
+   `closes #<issue-number>` when the PR completes the Issue.
+
 ## Repository at a glance
 
 ANOLISA is a monorepo. The twelve components and their supported development

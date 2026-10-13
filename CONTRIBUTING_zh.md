@@ -10,6 +10,19 @@
 修改文档前请先阅读
 [`specs/documentation-standard.md`](specs/documentation-standard.md)。该文件是文件位置、双语命名和文档同步要求的唯一规范来源。
 
+## 推荐的贡献方向
+
+如果希望寻找贡献方向，推荐优先参考 [Community Roadmap](https://github.com/agentic-os-org/ANOLISA/discussions/categories/community-roadmap) 中的组件专题。
+也欢迎提交 bug 报告、bug 修复，以及其他 Issue 和 PR。
+
+Roadmap 中的专题是候选方向，不代表排期承诺，也不代表任务已可认领。实现这些方向时，按以下 Issue 流程推进：
+
+1. 检索是否已有覆盖该方向的 Issue。如果没有，创建 Issue，链接原 Discussion 并说明拟实现的范围。
+2. 开始实现前，与组件 owner 确认当前版本、范围和验收标准。
+3. Issue 达到可认领状态后，按现有的
+   [社区认领流程](.github/TRIAGE.md#claiming-community-work)，在 Issue 中评论 `/claim`。
+4. 实现约定范围并提交关联 Issue 的 PR。PR 完成该 Issue 时，使用 `closes #<issue-number>`。
+
 ## 仓库概览
 
 ANOLISA 是一个 monorepo。下表列出十二个组件及其支持的开发平台。构建名称供
