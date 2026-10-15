@@ -15,6 +15,16 @@ import plan_matrix
 
 
 class PlanMatrixTests(unittest.TestCase):
+    def test_os_skills_targets(self) -> None:
+        rows = plan_matrix.build_matrix("os-skills")["include"]
+        self.assertEqual(
+            [(row["target-os"], row["target-arch"], row["profile"]) for row in rows],
+            [
+                ("linux", "x86_64", "static-linux"),
+                ("linux", "aarch64", "static-linux"),
+            ],
+        )
+
     def test_anolisa_targets(self) -> None:
         matrix = plan_matrix.build_matrix("anolisa")
 

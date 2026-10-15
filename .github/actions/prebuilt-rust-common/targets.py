@@ -4,6 +4,10 @@ from __future__ import annotations
 
 
 TARGETS = {
+    "os-skills": (
+        {"target-os": "linux", "target-arch": "x86_64", "profile": "static-linux"},
+        {"target-os": "linux", "target-arch": "aarch64", "profile": "static-linux"},
+    ),
     "anolisa": (
         {
             "target-os": "linux",
