@@ -126,6 +126,22 @@ refuses to load with it.
 - Node.js ≥ 20 and npm (for source build — bundles the OpenClaw adapter)
 - Optional: embedding provider (OpenAI or Ollama) for vector search
 
+## Raw package development
+
+Linux x86_64 and ARM64 packages contain the binary, configuration, user service
+and bundled OpenClaw adapter. Build the plugin with Node 22.23.2 using
+`make build-openclaw-plugin-ci`; this checks version consistency before using
+`npm ci --legacy-peer-deps` and emits an esbuild dependency manifest.
+
+`python3 packaging/raw/package.py --help` lists the explicit binary directory,
+plugin output directory, target, timestamp and TOML build metadata inputs.
+Metadata binds `version`, `target_os`, `target_arch`,
+`binaries.agent-memory` (SHA256) and `plugin.sha256` to the supplied files.
+The packager does not build or execute binaries. It renders the raw installation
+contract from `.anolisa/component.raw.toml.in` and Cargo.toml; the RPM contract
+remains separate. Both installation modes leave the user service stopped.
+Run `python3 tests/test_raw_packaging.py` for packaging regressions.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).

@@ -87,6 +87,19 @@ Profile 门控（basic/advanced/expert）按部署形态控制工具可见性。
 - Node.js ≥ 20 与 npm（源码构建 —— 打包内置的 OpenClaw adapter）
 - 可选：用于向量检索的 embedding 提供方（OpenAI 或 Ollama）
 
+## Raw 包开发
+
+Linux x86_64 和 ARM64 包包含主程序、配置、用户服务及已打包的 OpenClaw 适配器。
+使用 Node 22.23.2 执行 `make build-openclaw-plugin-ci`；该入口先检查版本一致性，
+再运行 `npm ci --legacy-peer-deps`，并生成 esbuild 依赖清单。
+
+`python3 packaging/raw/package.py --help` 列出必须显式传入的二进制目录、插件输出目录、
+目标架构、时间戳和 TOML 构建元数据。元数据以 `version`、`target_os`、`target_arch`、
+`binaries.agent-memory`（SHA256）和 `plugin.sha256` 绑定输入文件。
+打包器不构建或执行二进制；raw 安装契约由 `.anolisa/component.raw.toml.in` 和 Cargo.toml
+渲染，RPM 契约保持独立。两种安装模式均不会启动用户服务。
+通过 `python3 tests/test_raw_packaging.py` 运行打包回归测试。
+
 ## 许可证
 
 Apache License 2.0 — 详见 [LICENSE](LICENSE)。
