@@ -659,20 +659,24 @@ impl BM25Store {
     ///
     /// `cold_after_days` is an unbounded `u64` read straight from config, so
     /// the day span is widened with checked arithmetic. A threshold too large
-    /// to express as a millisecond offset saturates the cutoff to `i64::MIN`,
-    /// which reads as "nothing is old enough to go cold" rather than
-    /// overflowing the multiply (a panic in debug builds) or wrapping it into
-    /// a future cutoff that cools the whole warm set (release builds).
+    /// to express as a millisecond offset pins the cutoff at `i64::MIN`, which
+    /// reads as "nothing is old enough to go cold" -- not even a row stamped
+    /// with the minimum representable `mtime_ms` -- rather than overflowing
+    /// the multiply (a panic in debug builds) or wrapping it into a future
+    /// cutoff that cools the whole warm set (release builds).
     pub fn compact(&mut self, cold_after_days: u64) -> Result<usize> {
         let now_ms: i64 = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
-        let span_ms = i64::try_from(cold_after_days)
+        // The unrepresentable-threshold cutoff has to be `i64::MIN` itself,
+        // not the widest representable span subtracted from `now_ms`: with a
+        // positive clock, `now_ms - i64::MAX` lands above `i64::MIN`, so a row
+        // stored at the minimum timestamp would still be cold enough.
+        let cutoff_ms = i64::try_from(cold_after_days)
             .ok()
             .and_then(|days| days.checked_mul(86_400_000))
-            .unwrap_or(i64::MAX);
-        let cutoff_ms = now_ms.saturating_sub(span_ms);
+            .map_or(i64::MIN, |span_ms| now_ms.saturating_sub(span_ms));
 
         let tx = self.conn.transaction()?;
 
@@ -1851,6 +1855,28 @@ mod tests {
         let hits = s.search("recent", 5, true).unwrap();
         assert_eq!(hits.len(), 1, "fresh file must stay searchable");
         assert_eq!(hits[0].path, "fresh.md");
+    }
+
+    #[test]
+    fn compact_out_of_range_cold_after_days_keeps_minimum_mtime_row() {
+        // `i64::MIN` is the boundary the saturated cutoff must still refuse to
+        // cool. Subtracting a fallback `i64::MAX` span from a positive clock
+        // stopped one short of it, so this row used to be archived.
+        let mut s = BM25Store::open_in_memory_with(0.01, 0.3, true).unwrap();
+        s.upsert("oldest.md", i64::MIN, 20, "minimum mtime", None)
+            .unwrap();
+
+        // Neither overflow path -- a day count too big to widen, or a span too
+        // big to multiply -- may cool it.
+        for days in [i64::MAX as u64, u64::MAX] {
+            assert_eq!(
+                s.compact(days).unwrap(),
+                0,
+                "cold_after_days={days} is not expressible in milliseconds, \
+                 so nothing is old enough to go cold"
+            );
+            assert_eq!(s.warm_cold_counts().unwrap(), (1, 0));
+        }
     }
 
     #[test]
