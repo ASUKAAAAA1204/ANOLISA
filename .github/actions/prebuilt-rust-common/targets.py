@@ -72,6 +72,11 @@ TARGETS = {
             "profile": "darwin11-x86_64",
         },
     ),
+    "agentsight": (
+        {"target-os": "linux", "target-arch": "x86_64", "profile": "gnu2.28-x86_64"},
+        {"target-os": "linux", "target-arch": "aarch64", "profile": "gnu2.28-aarch64"},
+        {"target-os": "macos", "target-arch": "aarch64", "profile": "darwin11-aarch64"},
+    ),
     "tokenless": (
         {
             "target-os": "linux",

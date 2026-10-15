@@ -68,8 +68,13 @@ def cargo_sbom_version(tool: str) -> str:
     return match.group(1)
 
 
-def cargo_metadata(project_dir: Path, target: str) -> dict[str, Any]:
-    """Return Cargo's default-feature dependency graph for one target."""
+def cargo_metadata(
+    project_dir: Path, target: str, features: str = "", no_defaults: bool = False
+) -> dict[str, Any]:
+    """Return Cargo's dependency graph for the shipped feature selection."""
+    feature_args = ["--features", features] if features else []
+    if no_defaults:
+        feature_args.append("--no-default-features")
     try:
         result = subprocess.run(
             [
@@ -82,7 +87,9 @@ def cargo_metadata(project_dir: Path, target: str) -> dict[str, Any]:
                 target,
                 "--manifest-path",
                 str(project_dir / "Cargo.toml"),
+                *feature_args,
             ],
+            cwd=project_dir,
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -473,6 +480,8 @@ def main() -> int:
     parser.add_argument(
         "--project-dir", required=True, action="append", type=Path
     )
+    parser.add_argument("--features", default="")
+    parser.add_argument("--no-default-features", action="store_true")
     parser.add_argument("--source-date-epoch", required=True, type=int)
     parser.add_argument("--tool", default="cargo-sbom")
     args = parser.parse_args()
@@ -504,6 +513,9 @@ def main() -> int:
 
     documents: list[dict[str, Any]] = []
     for project_dir in project_dirs:
+        allowed = resolved_package_identities(
+            cargo_metadata(project_dir, args.target, args.features, args.no_default_features)
+        )
         try:
             result = subprocess.run(
                 [
@@ -513,6 +525,7 @@ def main() -> int:
                     "--project-directory",
                     str(project_dir),
                 ],
+                cwd=project_dir,
                 check=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -532,7 +545,7 @@ def main() -> int:
         documents.append(
             filter_sbom_for_target(
                 raw,
-                resolved_package_identities(cargo_metadata(project_dir, args.target)),
+                allowed,
             )
         )
     raw = merge_sboms(documents)

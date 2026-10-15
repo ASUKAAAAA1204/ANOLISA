@@ -56,8 +56,15 @@ class PlanMatrixTests(unittest.TestCase):
         )
         self.assertTrue(all(row["component"] == "tokenless" for row in matrix["include"]))
 
+    def test_agentsight_targets(self) -> None:
+        rows = plan_matrix.build_matrix("agentsight")["include"]
+        self.assertEqual(
+            [(row["target-os"], row["target-arch"]) for row in rows],
+            [("linux", "x86_64"), ("linux", "aarch64"), ("macos", "aarch64")],
+        )
+
     def test_component_without_prebuilt_targets(self) -> None:
-        self.assertEqual(plan_matrix.build_matrix("agentsight"), {"include": []})
+        self.assertEqual(plan_matrix.build_matrix("blaze"), {"include": []})
 
     def test_ws_ckpt_requires_both_linux_targets(self) -> None:
         matrix = plan_matrix.build_matrix("ws-ckpt")
