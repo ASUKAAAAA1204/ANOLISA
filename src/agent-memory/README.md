@@ -126,6 +126,17 @@ refuses to load with it.
 - Node.js ≥ 20 and npm (for source build — bundles the OpenClaw adapter)
 - Optional: embedding provider (OpenAI or Ollama) for vector search
 
+## GitHub build artifacts
+
+Release (`memory/v<version>`) and manual Preview builds produce Linux x86_64 and
+ARM64 raw packages on fixed Cross profiles, with a glibc 2.28 baseline. Each
+platform supplies `agent-memory-<version>-linux-<arch>.tar.gz`, `.sha256`,
+`.tar.gz.cdx.json` and its `.sha256` (eight files total). The archive contains
+both the Rust binary and the bundled OpenClaw adapter; its CycloneDX SBOM covers
+target Rust dependencies and npm code actually embedded in the plugin.
+Contracts, build inputs and packaging scripts come from the same source commit.
+Preview validation does not publish a version or switch the local release pipeline.
+
 ## Raw package development
 
 Linux x86_64 and ARM64 packages contain the binary, configuration, user service

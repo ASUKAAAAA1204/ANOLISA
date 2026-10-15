@@ -147,6 +147,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Build agent-memory precompiled package
+        id: agent-memory-prebuilt
+        if: matrix.component == 'agent-memory'
+        uses: ./.github/actions/build-agent-memory-prebuilt
+        with:
+          version: ${{ needs.package.outputs.version }}
+          target-os: ${{ matrix.target-os }}
+          target-arch: ${{ matrix.target-arch }}
+          profile: ${{ matrix.profile }}
+          tag: ${{ needs.package.outputs.tag }}
+
       - name: Build agentsight precompiled package
         id: agentsight-prebuilt
         if: matrix.component == 'agentsight'
@@ -219,6 +230,7 @@ jobs:
         env:
           COMPONENT: ${{ matrix.component }}
           ANOLISA_DIRECTORY: ${{ steps.anolisa-prebuilt.outputs.artifact-directory }}
+          AGENT_MEMORY_DIRECTORY: ${{ steps.agent-memory-prebuilt.outputs.artifact-directory }}
           AGENTSIGHT_DIRECTORY: ${{ steps.agentsight-prebuilt.outputs.artifact-directory }}
           COSH_NG_DIRECTORY: ${{ steps.cosh-ng-prebuilt.outputs.artifact-directory }}
           TOKENLESS_DIRECTORY: ${{ steps.tokenless-prebuilt.outputs.artifact-directory }}
@@ -227,6 +239,7 @@ jobs:
         run: |
           case "$COMPONENT" in
             anolisa) ARTIFACT_DIRECTORY="$ANOLISA_DIRECTORY" ;;
+            agent-memory) ARTIFACT_DIRECTORY="$AGENT_MEMORY_DIRECTORY" ;;
             agentsight) ARTIFACT_DIRECTORY="$AGENTSIGHT_DIRECTORY" ;;
             cosh-ng) ARTIFACT_DIRECTORY="$COSH_NG_DIRECTORY" ;;
             tokenless) ARTIFACT_DIRECTORY="$TOKENLESS_DIRECTORY" ;;
