@@ -396,3 +396,102 @@ fn audit_log_is_mirrored_to_session() {
     assert!(store_audit.contains("\"tool\":\"mem_write\""));
     assert!(session_log.contains("\"tool\":\"mem_write\""));
 }
+
+// ---------- read_log survives a torn trailing line ----------
+
+/// Start a session log service over a fresh temp dir.
+fn start_session_log(id: &str) -> (tempfile::TempDir, SessionLogService) {
+    let tmp = tempdir().unwrap();
+    let svc = SessionLogService::start(
+        tmp.path(),
+        SessionId::from_string(id).unwrap(),
+        "alice",
+        None,
+        "user-alice",
+        None,
+    )
+    .unwrap();
+    (tmp, svc)
+}
+
+/// Append raw bytes to the log behind the service's back, reproducing what a
+/// writer killed mid-append leaves on disk.
+fn append_raw(svc: &SessionLogService, bytes: &[u8]) {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(svc.log_path())
+        .unwrap();
+    f.write_all(bytes).unwrap();
+    f.flush().unwrap();
+}
+
+/// A trailing fragment that stops inside a multi-byte UTF-8 character, i.e.
+/// the exact tail a crash mid-append leaves behind. `0xE5` starts a 3-byte
+/// sequence and is never continued.
+const TORN_TAIL: &[u8] = b"{\"tool\":\"torn_frag";
+
+#[test]
+fn read_log_survives_torn_trailing_line_under_cap() {
+    let (_tmp, svc) = start_session_log("ses_torn_under");
+    svc.append_log(AuditEntry::new("mem_write").path("a.md").bytes(10))
+        .unwrap();
+    svc.append_log(AuditEntry::new("mem_read").path("a.md").bytes(10))
+        .unwrap();
+    append_raw(&svc, TORN_TAIL);
+    append_raw(&svc, &[0xE5]);
+
+    // Pre-fix this failed the UTF-8 decode and lost both complete records.
+    let log = svc.read_log().unwrap();
+    assert!(log.ends_with('\n'), "torn fragment must be dropped");
+    assert!(!log.contains("torn_frag"));
+
+    let lines: Vec<&str> = log.lines().filter(|l| !l.is_empty()).collect();
+    assert_eq!(lines.len(), 2, "both complete records survive");
+    let v: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(v["tool"], "mem_write");
+    let v: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(v["tool"], "mem_read");
+}
+
+#[test]
+fn read_log_survives_torn_trailing_line_over_cap() {
+    let (_tmp, svc) = start_session_log("ses_torn_over");
+
+    // Push the log past the 1 MiB read cap with valid multi-byte records so
+    // the tail-truncation path runs before the torn tail is reached.
+    let record = format!(
+        "{{\"tool\":\"mem_read\",\"note\":\"{}\"}}\n",
+        "会话日志".repeat(8)
+    );
+    let mut bulk = String::new();
+    while bulk.len() <= 1_048_576 {
+        bulk.push_str(&record);
+    }
+    append_raw(&svc, bulk.as_bytes());
+    append_raw(&svc, TORN_TAIL);
+    append_raw(&svc, &[0xE5]);
+
+    let log = svc.read_log().unwrap();
+    assert!(log.len() <= 1_048_576, "tail must stay within the cap");
+    assert!(log.ends_with('\n'), "torn fragment must be dropped");
+    assert!(!log.contains("torn_frag"));
+
+    let lines: Vec<&str> = log.lines().filter(|l| !l.is_empty()).collect();
+    assert!(!lines.is_empty(), "recent records survive the torn tail");
+    for line in lines {
+        serde_json::from_str::<serde_json::Value>(line)
+            .unwrap_or_else(|e| panic!("every returned line must be a complete record: {e}"));
+    }
+}
+
+#[test]
+fn read_log_of_only_a_torn_line_is_empty() {
+    let (_tmp, svc) = start_session_log("ses_torn_only");
+    append_raw(&svc, TORN_TAIL);
+    append_raw(&svc, &[0xE5]);
+
+    // No record was ever completed, so there is nothing to report — but the
+    // read must still succeed rather than surface a decode error.
+    assert_eq!(svc.read_log().unwrap(), "");
+}
