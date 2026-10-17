@@ -459,14 +459,17 @@ fn read_log_survives_torn_trailing_line_over_cap() {
     let (_tmp, svc) = start_session_log("ses_torn_over");
 
     // Push the log past the 1 MiB read cap with valid multi-byte records so
-    // the tail-truncation path runs before the torn tail is reached.
-    let record = format!(
-        "{{\"tool\":\"mem_read\",\"note\":\"{}\"}}\n",
-        "会话日志".repeat(8)
-    );
+    // the tail-truncation path runs before the torn tail is reached. Each
+    // record is numbered so the assertions below can tell the recent tail
+    // from the discarded head.
+    let note = "会话日志".repeat(8);
     let mut bulk = String::new();
+    let mut written = 0usize;
     while bulk.len() <= 1_048_576 {
-        bulk.push_str(&record);
+        bulk.push_str(&format!(
+            "{{\"tool\":\"mem_read\",\"seq\":{written},\"note\":\"{note}\"}}\n"
+        ));
+        written += 1;
     }
     append_raw(&svc, bulk.as_bytes());
     append_raw(&svc, TORN_TAIL);
@@ -479,10 +482,18 @@ fn read_log_survives_torn_trailing_line_over_cap() {
 
     let lines: Vec<&str> = log.lines().filter(|l| !l.is_empty()).collect();
     assert!(!lines.is_empty(), "recent records survive the torn tail");
-    for line in lines {
+    for line in &lines {
         serde_json::from_str::<serde_json::Value>(line)
             .unwrap_or_else(|e| panic!("every returned line must be a complete record: {e}"));
     }
+    // Tail truncation must keep the *most recent* records, not the oldest.
+    let last: serde_json::Value = serde_json::from_str(lines.last().expect("a returned line"))
+        .expect("last returned line parses");
+    assert_eq!(
+        last["seq"].as_u64(),
+        Some((written - 1) as u64),
+        "the window must end at the newest complete record"
+    );
 }
 
 #[test]
@@ -494,4 +505,25 @@ fn read_log_of_only_a_torn_line_is_empty() {
     // No record was ever completed, so there is nothing to report — but the
     // read must still succeed rather than surface a decode error.
     assert_eq!(svc.read_log().unwrap(), "");
+}
+
+#[test]
+fn mem_session_log_survives_a_torn_trailing_line() {
+    // The user-visible surface: `mem_session_log` must still return the
+    // session's audit history once the log has been torn.
+    let (_store_tmp, _session_tmp, svc) = setup_service();
+    svc.write("a.md", "hello", false).unwrap();
+
+    let session = svc.session.as_ref().expect("session ready");
+    append_raw(session, TORN_TAIL);
+    append_raw(session, &[0xE5]);
+
+    let log = svc
+        .session_log()
+        .expect("a torn tail must not fail mem_session_log");
+    assert!(
+        log.contains("\"tool\":\"mem_write\""),
+        "audit history lost: {log:?}"
+    );
+    assert!(!log.contains("torn_frag"), "torn fragment leaked: {log:?}");
 }

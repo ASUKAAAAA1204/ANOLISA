@@ -252,6 +252,12 @@ impl SessionLogService {
     /// A trailing fragment that was never newline-terminated is dropped, so
     /// a writer killed mid-append cannot make the records it already
     /// completed unreadable.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MemoryError::Io`] when the log cannot be read, and
+    /// [`MemoryError::Other`] when the bytes between two record boundaries
+    /// are not valid UTF-8.
     pub fn read_log(&self) -> Result<String> {
         // Hold the write-side lock while reading so we get a consistent
         // snapshot (no half-written lines) — not to prevent concurrent
