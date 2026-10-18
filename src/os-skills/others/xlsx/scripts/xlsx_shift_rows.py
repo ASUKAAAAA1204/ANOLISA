@@ -8,7 +8,7 @@ Usage:
     # Insert 2 rows at row 5 (rows 5+ shift down by 2)
     python3 xlsx_shift_rows.py <work_dir> insert 5 2
 
-    # Delete 1 row at row 8 (rows 9+ shift up by 1)
+    # Delete 1 row at row 8 (row 8 content is removed; rows 9+ shift up by 1)
     python3 xlsx_shift_rows.py <work_dir> delete 8 1
 
 What it updates in every XML file under <work_dir>:
@@ -155,8 +155,17 @@ def _tag(local: str) -> str:
     return f"{{{NS_MAIN}}}{local}"
 
 
-def process_worksheet(path: str, at: int, delta: int) -> int:
-    """Update row/cell references in a worksheet XML. Returns change count."""
+def process_worksheet(path: str, at: int, delta: int,
+                      delete_from: int | None = None,
+                      delete_count: int = 0) -> int:
+    """Update row/cell references in a worksheet XML. Returns change count.
+
+    When ``delete_from`` is set, row elements whose ``r`` falls in
+    ``[delete_from, delete_from + delete_count)`` are dropped (their content
+    is gone, as the usage docstring promises) instead of being relabeled onto
+    the rows above them. ``at`` is then the shift threshold for the surviving
+    rows (``at = delete_from + delete_count`` for delete mode).
+    """
     tree = ET.parse(path)
     root = tree.getroot()
     changes = 0
@@ -172,12 +181,19 @@ def process_worksheet(path: str, at: int, delta: int) -> int:
     # 2. <row r="N"> and <c r="XN"> inside sheetData
     sheet_data = root.find(_tag("sheetData"))
     if sheet_data is not None:
-        rows_to_reorder = []
         for row_el in list(sheet_data):
             r_str = row_el.get("r")
             if r_str is None:
                 continue
             r = int(r_str)
+
+            # Delete mode: drop the rows whose content is being removed.
+            if (delete_from is not None
+                    and delete_from <= r < delete_from + delete_count):
+                sheet_data.remove(row_el)
+                changes += 1
+                continue
+
             if r >= at:
                 new_r = max(1, r + delta)
                 row_el.set("r", str(new_r))
@@ -323,8 +339,17 @@ def main() -> None:
 
     if operation == "insert":
         delta = count
+        shift_at = at
+        delete_from: int | None = None
+        delete_count = 0
     else:
         delta = -count
+        # Rows inside [at, at+count) are deleted; only rows at or below the
+        # deleted block shift up. Relabeling rows >= at would renumber the
+        # deleted row itself onto the row above it and duplicate content.
+        shift_at = at + count
+        delete_from = at
+        delete_count = count
 
     if not os.path.isdir(work_dir):
         print(f"ERROR: Directory not found: {work_dir}")
@@ -342,7 +367,8 @@ def main() -> None:
         for fname in sorted(os.listdir(ws_dir)):
             if fname.endswith(".xml"):
                 fpath = os.path.join(ws_dir, fname)
-                n = process_worksheet(fpath, at, delta)
+                n = process_worksheet(fpath, shift_at, delta,
+                                      delete_from, delete_count)
                 if n:
                     print(f"  Updated {n:3d} references in xl/worksheets/{fname}")
                     total_changes += n
@@ -353,7 +379,7 @@ def main() -> None:
         for fname in sorted(os.listdir(charts_dir)):
             if fname.endswith(".xml"):
                 fpath = os.path.join(charts_dir, fname)
-                n = process_chart(fpath, at, delta)
+                n = process_chart(fpath, shift_at, delta)
                 if n:
                     print(f"  Updated chart ranges in xl/charts/{fname}")
                     total_changes += n
@@ -364,7 +390,7 @@ def main() -> None:
         for fname in sorted(os.listdir(tables_dir)):
             if fname.endswith(".xml"):
                 fpath = os.path.join(tables_dir, fname)
-                n = process_table(fpath, at, delta)
+                n = process_table(fpath, shift_at, delta)
                 if n:
                     print(f"  Updated table ref in xl/tables/{fname}")
                     total_changes += n
@@ -375,7 +401,7 @@ def main() -> None:
         for fname in sorted(os.listdir(cache_dir)):
             if "Definition" in fname and fname.endswith(".xml"):
                 fpath = os.path.join(cache_dir, fname)
-                n = process_pivot_cache(fpath, at, delta)
+                n = process_pivot_cache(fpath, shift_at, delta)
                 if n:
                     print(f"  Updated pivot source range in xl/pivotCaches/{fname}")
                     total_changes += n
