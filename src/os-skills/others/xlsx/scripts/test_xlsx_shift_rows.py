@@ -91,6 +91,9 @@ class TestXlsxShiftRows(unittest.TestCase):
              [c.get("r") for c in row],
              [c.find(_tag("f")).text
               if c.find(_tag("f")) is not None else None
+              for c in row],
+             [c.find(_tag("v")).text
+              if c.find(_tag("v")) is not None else None
               for c in row])
             for row in sheet_data
         ]
@@ -101,10 +104,13 @@ class TestXlsxShiftRows(unittest.TestCase):
         numbers = [r[0] for r in rows]
         # No duplicate r attributes and the deleted content is gone.
         self.assertEqual(numbers, [7, 8])
-        self.assertEqual([c for c, _, _ in rows if c == 7], [7])
-        # Old row 9 shifted up to 8 with its cell address and formula.
+        self.assertEqual([c for c, *_ in rows if c == 7], [7])
+        # Old row 9 shifted up to 8 with its cell address, formula and value;
+        # the deleted row's value ("8") no longer appears anywhere.
         self.assertEqual(rows[1][1], ["A8", "B8"])
         self.assertEqual(rows[1][2], [None, "A8*2"])
+        self.assertEqual(rows[0][3], ["7"])
+        self.assertEqual(rows[1][3], ["9", None])
 
     def test_delete_multiple_rows(self):
         self.run_script("delete", "7", "2")
@@ -113,6 +119,7 @@ class TestXlsxShiftRows(unittest.TestCase):
         self.assertEqual(numbers, [7])
         self.assertEqual(rows[0][1], ["A7", "B7"])
         self.assertEqual(rows[0][2], [None, "A7*2"])
+        self.assertEqual(rows[0][3], ["9", None])
 
     def test_insert_mode_unchanged(self):
         self.run_script("insert", "8", "1")
