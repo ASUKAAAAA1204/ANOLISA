@@ -286,13 +286,24 @@ fn flush(
                 }
             }
             for file_path in found_files {
-                if let Some(rel) = relative(mount, &file_path) {
-                    walked_files.insert(rel);
+                match relative(mount, &file_path) {
+                    Some(rel) => {
+                        walked_files.insert(rel);
+                    }
+                    // A walked file we cannot name relative to the mount
+                    // would be missing from `walked_files` while its
+                    // directory is still registered as a prune candidate —
+                    // i.e. a live entry could be deleted. Treat the walk as
+                    // incomplete so the prune is skipped entirely.
+                    None => walk_complete = false,
                 }
                 expanded.insert(file_path);
             }
             if walk_complete {
                 if let Some(rel_dir) = relative(mount, path) {
+                    // The mount root is never a prune candidate — retiring
+                    // entries at the root is `full_scan`'s job. An empty
+                    // rel_dir would build the prefix "/" and match nothing.
                     if !rel_dir.is_empty() {
                         prune_dirs.push(rel_dir);
                     }
@@ -381,18 +392,60 @@ fn flush(
     // The prefix match is literal Rust string comparison: `notes/`
     // prunes `notes/x.md` but never `notes2/x.md`, and directory names
     // containing `_` or `%` are not treated as SQL LIKE wildcards
-    // (see #3797).
+    // (see #3797). Candidates are scoped to each subtree with a range
+    // scan on the `path` index (`known_paths_under`) instead of reading
+    // the whole index, and the deletes are batched into one transaction.
     if !prune_dirs.is_empty() {
-        let prefixes: Vec<String> = prune_dirs.iter().map(|d| format!("{d}/")).collect();
-        for p in store.known_paths()? {
-            if walked_files.contains(&p) {
-                continue;
+        // A batch routinely contains a directory and its subdir (a subdir
+        // create/remove also bumps the parent's link count, which notify
+        // surfaces as Modify(Metadata)). Pruning the ancestor already
+        // covers the whole subtree, so drop entries under a kept prefix.
+        prune_dirs.sort();
+        let mut kept: Vec<String> = Vec::new();
+        for d in prune_dirs {
+            if !kept
+                .iter()
+                .any(|k| d == *k || d.starts_with(&format!("{k}/")))
+            {
+                kept.push(d);
             }
-            if prefixes.iter().any(|pre| p.starts_with(pre.as_str())) {
-                if let Err(e) = store.remove(&p) {
-                    tracing::warn!("index prune failed for {p}: {e}");
+        }
+        let mut stale: Vec<String> = Vec::new();
+        for d in &kept {
+            let under = match store.known_paths_under(d) {
+                Ok(v) => v,
+                Err(e) => {
+                    // `flush` runs on every debounce window; a transient
+                    // SQLite error here must not kill the watcher thread.
+                    // The upserts/removes above already landed, so skip
+                    // this prune and let the next window retry.
+                    tracing::warn!("index prune skipped: {e}");
+                    return Ok(());
                 }
+            };
+            // Also consider `d` itself: a file that was later replaced by
+            // this directory is not covered by the `d/` range, but its row
+            // is stale (Phase 2 skips it because it is no longer a file).
+            for p in under.into_iter().chain(std::iter::once(d.clone())) {
+                if walked_files.contains(&p) {
+                    continue;
+                }
+                // A row can appear between the Phase-1 walk and this prune
+                // (IndexHandle::reindex_file from memory_observe, #1462).
+                // Never delete a path that still exists on disk as a file;
+                // a path that exists only as a directory is a stale
+                // file-replaced-by-dir row and must go.
+                if crate::safe_fs::metadata(mount.root_fd.as_fd(), Path::new(&p))
+                    .map(|m| m.is_file())
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                stale.push(p);
             }
+        }
+        if let Err(e) = store.remove_many(&stale) {
+            tracing::warn!("index prune failed for {} paths: {e}", stale.len());
         }
     }
 
@@ -749,6 +802,113 @@ mod tests {
         assert_eq!(
             paths(&store),
             vec!["notes/a.md".to_string(), "notes/b.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn flush_prune_keeps_row_written_after_walk() {
+        // #1462 race: a row written between the Phase-1 walk and the
+        // Phase-3 prune (memory_observe -> IndexHandle::reindex_file) is
+        // absent from `walked_files` while its file is on disk. The prune
+        // must not delete it. Reproduce the "on disk but not walked" state
+        // deterministically by pointing the meta-dir filter at the whole
+        // root, so the walk yields no files yet still completes.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().expect("canonicalize root");
+        fs::create_dir_all(root.join("notes")).unwrap();
+        fs::write(root.join("notes/late.md"), "late").unwrap();
+        let root_fd: OwnedFd = fs::File::open(&root).expect("open root dir fd").into();
+        let mount = MountPointLite {
+            meta_dir: root.clone(),
+            meta_dir_name: ".anolisa".to_string(),
+            root,
+            root_fd: Arc::new(root_fd),
+        };
+
+        let store = new_store();
+        index(&store, "notes/late.md");
+        index(&store, "notes/gone.md");
+
+        run_flush(&mount, &store, vec![mount.root.join("notes")]);
+
+        assert_eq!(paths(&store), vec!["notes/late.md".to_string()]);
+    }
+
+    #[test]
+    fn flush_prune_removes_row_for_file_replaced_by_directory() {
+        // A file `notes` that was later replaced by a directory is stale,
+        // but the `notes/` range does not cover the exact path. It must be
+        // removed without cascading into the live children the walk just
+        // indexed.
+        let (_tmp, mount) = fixture();
+        fs::create_dir_all(mount.root.join("notes")).unwrap();
+        fs::write(mount.root.join("notes/a.md"), "alpha").unwrap();
+
+        let store = new_store();
+        index(&store, "notes");
+        index(&store, "notes/a.md");
+
+        run_flush(&mount, &store, vec![mount.root.join("notes")]);
+
+        assert_eq!(paths(&store), vec!["notes/a.md".to_string()]);
+    }
+
+    #[test]
+    fn flush_prune_nested_dirs_in_one_batch_keeps_live_files() {
+        // A subdir event also bumps the parent's link count, so one batch
+        // can carry `notes` and `notes/observed`. Pruning the ancestor
+        // covers the whole subtree: both stale rows go, both live rows stay.
+        let (_tmp, mount) = fixture();
+        fs::create_dir_all(mount.root.join("notes/observed")).unwrap();
+        fs::write(mount.root.join("notes/a.md"), "alpha").unwrap();
+        fs::write(mount.root.join("notes/observed/c.md"), "gamma").unwrap();
+
+        let store = new_store();
+        index(&store, "notes/a.md");
+        index(&store, "notes/old.md");
+        index(&store, "notes/observed/c.md");
+        index(&store, "notes/observed/old.md");
+
+        run_flush(
+            &mount,
+            &store,
+            vec![mount.root.join("notes"), mount.root.join("notes/observed")],
+        );
+
+        assert_eq!(
+            paths(&store),
+            vec!["notes/a.md".to_string(), "notes/observed/c.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn flush_prune_makes_stale_body_unsearchable() {
+        // #4634's user-visible symptom is "still searchable": the prune
+        // must cascade through files_fts (and files_vec), not just drop
+        // the `files` row.
+        let (_tmp, mount) = fixture();
+        fs::create_dir_all(mount.root.join("notes")).unwrap();
+        fs::write(mount.root.join("notes/a.md"), "alpha").unwrap();
+
+        let store = new_store();
+        {
+            let mut s = store.lock().unwrap();
+            s.upsert("notes/a.md", 0, 10, "alpha", None)
+                .expect("seed a.md");
+            s.upsert("notes/b.md", 0, 10, "zzprunetoken body", None)
+                .expect("seed b.md");
+        }
+
+        run_flush(&mount, &store, vec![mount.root.join("notes")]);
+
+        let hits = store
+            .lock()
+            .unwrap()
+            .search("zzprunetoken", 5, false)
+            .expect("search");
+        assert!(
+            hits.iter().all(|h| h.path != "notes/b.md"),
+            "pruned entry must not come back from search: {hits:?}"
         );
     }
 }
