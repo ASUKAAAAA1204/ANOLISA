@@ -70,10 +70,13 @@ def _insert_row_sorted(sheet_data: ET.Element, row_num: int) -> ET.Element:
     """
     row_el = ET.Element(_tag("row"))
     row_el.set("r", str(row_num))
-    # Callers create rows in ascending order, so the common case is
-    # "append past the current last row". Checking the tail first keeps a
-    # batch of inserts linear; the head scan below stays the fallback for
-    # out-of-order single inserts (e.g. a total row above the formula span).
+    # Fast path: tail-append is sound because sheetData is kept ascending,
+    # so the last row is the max and `last_r < row_num` means row_num
+    # belongs after every existing row. Callers usually create rows in
+    # ascending order, which is why this hits almost always — but the
+    # invariant is the sheet's order, not the caller's. The head scan
+    # below stays the fallback for out-of-order single inserts (e.g. a
+    # total row above the formula span).
     n = len(sheet_data)
     if n:
         last_r = sheet_data[n - 1].get("r")
