@@ -5377,27 +5377,45 @@ fn eval_sched_latency_ns_at(
     if !info.param_exists(path) {
         return 1;
     }
-    if info.cpu_cores <= 32 {
-        return 1;
-    }
     let Some(current) = read_switch(path) else {
         return 1;
     };
-    if current < 12000000 {
-        recs.push(Recommendation {
-            param: "kernel.sched_latency_ns".to_string(),
-            current_value: current.to_string(),
-            recommended_value: "24000000".to_string(),
-            reason: format!(
-                "大核数 ({} 核) 服务器增大 CFS 调度周期可减少上下文切换开销",
-                info.cpu_cores
-            ),
-            confidence: Confidence::Medium,
-            category: Category::Performance,
-            writable: true,
-        });
+    if let Some(rec) =
+        sched_latency_ns_recommendation(current, info.cpu_cores, &info.kernel_version)
+    {
+        recs.push(rec);
     }
     1
+}
+
+/// Emit the `kernel.sched_latency_ns` recommendation for an already-read
+/// value; split from the file probe so the version gate is testable anywhere.
+///
+/// Linux 5.13 ("sched: Move SCHED_DEBUG sysctl to debugfs", 8a99b6833c88 —
+/// the commit already cited for the min/wakeup granularity siblings) moved
+/// `sched_latency_ns` out of sysctl too: in v6.6 it is exported only as
+/// `/sys/kernel/debug/sched/latency_ns` (kernel/sched/debug.c). A node under
+/// the old name exists only where a vendor tree re-registered it for another
+/// class, and no code in such a tree reads that variable: the `/proc/sys`
+/// write changes nothing while the report claims the CFS period was raised
+/// (issue #8083). Silence the rule from 5.13 on, the way its siblings do.
+fn sched_latency_ns_recommendation(
+    current: u64,
+    cpu_cores: usize,
+    kernel_version: &str,
+) -> Option<Recommendation> {
+    if kernel_at_least(kernel_version, 5, 13) || cpu_cores <= 32 || current >= 12_000_000 {
+        return None;
+    }
+    Some(Recommendation {
+        param: "kernel.sched_latency_ns".to_string(),
+        current_value: current.to_string(),
+        recommended_value: "24000000".to_string(),
+        reason: format!("大核数 ({cpu_cores} 核) 服务器增大 CFS 调度周期可减少上下文切换开销"),
+        confidence: Confidence::Medium,
+        category: Category::Performance,
+        writable: true,
+    })
 }
 
 fn eval_tcp_challenge_ack_limit(info: &SystemInfo, recs: &mut Vec<Recommendation>) -> usize {
@@ -19004,6 +19022,44 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    #[test]
+    fn sched_latency_recommendation_is_silent_from_5_13() {
+        // Linux 5.13 (8a99b6833c88) moved sched_latency_ns to debugfs; the
+        // min/wakeup granularity siblings already gate on it (issue #8083).
+        assert!(sched_latency_ns_recommendation(6_000_000, 64, "5.10.0-26-amd64").is_some());
+        assert!(sched_latency_ns_recommendation(6_000_000, 64, "5.4.0-150").is_some());
+        assert!(sched_latency_ns_recommendation(6_000_000, 64, "5.13.0").is_none());
+        assert!(sched_latency_ns_recommendation(6_000_000, 64, "6.6.87.2").is_none());
+        // An unknown version keeps the advice, matching the siblings.
+        assert!(sched_latency_ns_recommendation(6_000_000, 64, "").is_some());
+        // The preconditions the rule always had stay in the same helper.
+        assert!(sched_latency_ns_recommendation(6_000_000, 8, "5.10.0").is_none());
+        assert!(sched_latency_ns_recommendation(12_000_000, 64, "5.10.0").is_none());
+    }
+
+    #[test]
+    fn sched_latency_advice_silenced_on_modern_kernels() {
+        // Issue #8083 repro: kernel 6.6.87.2, 64 cores, a readable synthetic
+        // node at 6000000 — the old rule emitted a write no code reads.
+        let (_, high, _) = zero_switch_paths("sched_latency", b"24000000\n");
+        let low = high.with_file_name("low");
+        std::fs::write(&low, b"6000000\n").unwrap();
+        let mut info = make_test_info();
+        info.cpu_cores = 64;
+        info.kernel_version = "6.6.87.2".to_string();
+        let mut recs = Vec::new();
+        eval_sched_latency_ns_at(&info, &mut recs, low.to_str().unwrap());
+        assert!(
+            recs.is_empty(),
+            "the node moved to debugfs in 5.13; the write lands nowhere"
+        );
+        // Below 5.13 the same fixture still fires.
+        info.kernel_version = "5.4.0".to_string();
+        let mut recs = Vec::new();
+        eval_sched_latency_ns_at(&info, &mut recs, low.to_str().unwrap());
+        assert_eq!(recs.len(), 1, "a pre-5.13 host still gets the advice");
     }
 
     #[test]
