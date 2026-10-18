@@ -65,6 +65,41 @@ function warnAboutSkippedLines(
 }
 
 /**
+ * True when `filePath` exists, is non-empty, and its last byte is not a
+ * line terminator. A torn trailing record (crash mid-append) leaves such a
+ * fragment; appending directly to it would glue the new record onto the
+ * fragment and corrupt both.
+ */
+function endsWithoutNewline(filePath: string): boolean {
+  let fd: number | undefined;
+  try {
+    const stats = fs.statSync(filePath);
+    if (stats.size === 0) return false;
+    fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(1);
+    fs.readSync(fd, buf, 0, 1, stats.size - 1);
+    const last = buf[0];
+    return last !== 0x0a && last !== 0x0d; // '\n' or '\r'
+  } catch {
+    // Missing or unreadable: nothing to isolate, append as-is.
+    return false;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+/**
+ * Isolates a torn trailing fragment before an append by terminating the
+ * current last line. The fragment becomes its own (skipped) line and the
+ * new record starts on a clean line; existing bytes are never rewritten.
+ */
+function ensureTrailingNewline(filePath: string): void {
+  if (endsWithoutNewline(filePath)) {
+    fs.appendFileSync(filePath, '\n', 'utf8');
+  }
+}
+
+/**
  * Reads the first N records from a JSONL file efficiently.
  * Unparsable lines are skipped so a torn trailing record cannot hide the
  * records before it; scanning for further records stops once
@@ -168,6 +203,7 @@ export async function writeLine(
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
+    ensureTrailingNewline(filePath);
     fs.appendFileSync(filePath, line, 'utf8');
   });
 }
@@ -183,6 +219,7 @@ export function writeLineSync(filePath: string, data: unknown): void {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
+  ensureTrailingNewline(filePath);
   fs.appendFileSync(filePath, line, 'utf8');
 }
 

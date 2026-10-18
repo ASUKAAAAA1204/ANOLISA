@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { read, readLines } from './jsonl-utils.js';
+import { read, readLines, writeLine, writeLineSync } from './jsonl-utils.js';
 
 describe('jsonl-utils torn-line tolerance', () => {
   let tempDir: string;
@@ -96,5 +96,63 @@ describe('jsonl-utils torn-line tolerance', () => {
     await expect(readLines(filePath, 1)).resolves.toEqual([]);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy.mock.calls[0][0]).toMatch(/skipped \d+ invalid line\(s\)/);
+  });
+});
+
+describe('jsonl-utils append after torn tail', () => {
+  let tempDir: string;
+  let warnSpy: MockInstance;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonl-append-test-'));
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const filePathFor = (name: string): string => path.join(tempDir, name);
+
+  it('writeLineSync isolates a torn trailing fragment', async () => {
+    const filePath = filePathFor('torn.jsonl');
+    fs.writeFileSync(filePath, '{"a":1}\n{"uuid":', 'utf8');
+    writeLineSync(filePath, { b: 2 });
+    // The fragment gets its own terminated line; the new record is clean.
+    expect(fs.readFileSync(filePath, 'utf8')).toBe(
+      '{"a":1}\n{"uuid":\n{"b":2}\n',
+    );
+    await expect(read(filePath)).resolves.toEqual([{ a: 1 }, { b: 2 }]);
+  });
+
+  it('writeLine isolates a torn trailing fragment', async () => {
+    const filePath = filePathFor('torn-async.jsonl');
+    fs.writeFileSync(filePath, '{"a":1}\n{"uuid":', 'utf8');
+    await writeLine(filePath, { b: 2 });
+    expect(fs.readFileSync(filePath, 'utf8')).toBe(
+      '{"a":1}\n{"uuid":\n{"b":2}\n',
+    );
+    await expect(read(filePath)).resolves.toEqual([{ a: 1 }, { b: 2 }]);
+  });
+
+  it('writeLineSync does not add a newline to a well-terminated file', () => {
+    const filePath = filePathFor('clean.jsonl');
+    fs.writeFileSync(filePath, '{"a":1}\n', 'utf8');
+    writeLineSync(filePath, { b: 2 });
+    expect(fs.readFileSync(filePath, 'utf8')).toBe('{"a":1}\n{"b":2}\n');
+  });
+
+  it('writeLineSync does not touch a CRLF-terminated tail', () => {
+    const filePath = filePathFor('crlf.jsonl');
+    fs.writeFileSync(filePath, '{"a":1}\r\n', 'utf8');
+    writeLineSync(filePath, { b: 2 });
+    expect(fs.readFileSync(filePath, 'utf8')).toBe('{"a":1}\r\n{"b":2}\n');
+  });
+
+  it('writeLineSync creates a fresh file without a leading newline', () => {
+    const filePath = filePathFor('new.jsonl');
+    writeLineSync(filePath, { a: 1 });
+    expect(fs.readFileSync(filePath, 'utf8')).toBe('{"a":1}\n');
   });
 });

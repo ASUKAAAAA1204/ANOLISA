@@ -408,6 +408,12 @@ export class SessionService {
 
   /**
    * Reconstructs a linear conversation from tree-structured records.
+   *
+   * Intact chains are followed strictly through `parentUuid`, preserving
+   * branch semantics. When a parent is missing — the record was lost to an
+   * unparsable line skipped during read — the walk bridges the gap to the
+   * record that precedes the current one in append order, so history before
+   * the corruption stays recoverable instead of being truncated.
    */
   private reconstructHistory(
     records: ChatRecord[],
@@ -422,6 +428,10 @@ export class SessionService {
       recordsByUuid.set(record.uuid, existing);
     }
 
+    // Last file-order index per uuid, used only to bridge missing parents.
+    const lastIndexByUuid = new Map<string, number>();
+    records.forEach((record, index) => lastIndexByUuid.set(record.uuid, index));
+
     let currentUuid: string | null =
       leafUuid ?? records[records.length - 1].uuid;
     const uuidChain: string[] = [];
@@ -432,7 +442,17 @@ export class SessionService {
       uuidChain.push(currentUuid);
       const recordsForUuid = recordsByUuid.get(currentUuid);
       if (!recordsForUuid || recordsForUuid.length === 0) break;
-      currentUuid = recordsForUuid[0].parentUuid;
+      const parentUuid = recordsForUuid[0].parentUuid;
+      if (parentUuid && !recordsByUuid.has(parentUuid)) {
+        // Missing parent (lost to corruption): bridge to the preceding
+        // record in append order; stop if that would cycle.
+        const index = lastIndexByUuid.get(currentUuid) ?? -1;
+        const bridgeUuid = index > 0 ? records[index - 1].uuid : null;
+        currentUuid =
+          bridgeUuid && !visited.has(bridgeUuid) ? bridgeUuid : null;
+      } else {
+        currentUuid = parentUuid;
+      }
     }
 
     uuidChain.reverse();
