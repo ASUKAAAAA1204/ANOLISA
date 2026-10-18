@@ -70,7 +70,17 @@ def _insert_row_sorted(sheet_data: ET.Element, row_num: int) -> ET.Element:
     """
     row_el = ET.Element(_tag("row"))
     row_el.set("r", str(row_num))
-    insert_at = len(list(sheet_data))
+    # Callers create rows in ascending order, so the common case is
+    # "append past the current last row". Checking the tail first keeps a
+    # batch of inserts linear; the head scan below stays the fallback for
+    # out-of-order single inserts (e.g. a total row above the formula span).
+    n = len(sheet_data)
+    if n:
+        last_r = sheet_data[n - 1].get("r")
+        if last_r is not None and int(last_r) < row_num:
+            sheet_data.insert(n, row_el)
+            return row_el
+    insert_at = n
     for i, existing in enumerate(sheet_data):
         r = existing.get("r")
         if r is not None and int(r) > row_num:

@@ -125,6 +125,24 @@ class AddColumnRowOrderTest(unittest.TestCase):
         self.assertEqual(self.row_numbers(), [1, 2, 3, 4, 5])
         self.assertIn("C4", self.cell_refs())
 
+    def test_new_row_after_all_existing_rows(self):
+        # Tail-insert branch of the helper: existing [1,2,3] + total row 5
+        # must land after row 3 (the common ascending-batch fast path).
+        self._write(self.sheet_path, sheet_xml([1, 2, 3]))
+        self.run_script("--total-row", "5", "--total-formula",
+                        "=SUM(C1:C3)")
+        self.assertEqual(self.row_numbers(), [1, 2, 3, 5])
+        self.assertIn("C5", self.cell_refs())
+
+    def test_new_row_before_all_existing_rows(self):
+        # Head-insert branch: existing [2,3] + formula on row 1 must land
+        # before row 2, not at the tail.
+        self._write(self.sheet_path, sheet_xml([2, 3]))
+        self.run_script("--formula", "=A{row}+B{row}",
+                        "--formula-rows", "1:1")
+        self.assertEqual(self.row_numbers(), [1, 2, 3])
+        self.assertIn("C1", self.cell_refs())
+
     def test_existing_rows_keep_order(self):
         # When all target rows already exist, no rows are created and the
         # original order is preserved.
