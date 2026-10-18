@@ -282,7 +282,7 @@ fn check_file_exists(env: &CheckEnv<'_>, path: &str, mode: Option<&str>) -> Chec
             if let Some(want) = mode {
                 match parse_octal_mode(want) {
                     Some(want_bits) => {
-                        let actual = meta.permissions().mode() & 0o777;
+                        let actual = meta.permissions().mode() & 0o7777;
                         if actual != want_bits {
                             return CheckOutcome::leaf(
                                 label,
@@ -699,6 +699,64 @@ mod tests {
             },
         );
         assert_eq!(out.status, CheckStatus::Failed);
+    }
+
+    #[test]
+    fn file_exists_mode_compares_full_12_bit_mode() {
+        let home = tempdir().expect("tempdir");
+        let layout = layout_for(home.path());
+        let path = layout.bin_dir.join("setuid-tool");
+        fs::create_dir_all(&layout.bin_dir).expect("mkdir");
+        fs::write(&path, "x").expect("write");
+        let mut perms = fs::metadata(&path).expect("stat").permissions();
+        perms.set_mode(0o4755);
+        fs::set_permissions(&path, perms).expect("chmod");
+        let out = run_check(
+            &CheckSpec::FileExists {
+                path: path.display().to_string(),
+                mode: Some("4755".to_string()),
+                owner: None,
+            },
+            &CheckEnv {
+                layout: &layout,
+                dry_run: false,
+                service_probes: None,
+            },
+        );
+        assert_eq!(out.status, CheckStatus::Ok, "detail={:?}", out.detail);
+    }
+
+    #[test]
+    fn file_exists_mode_special_bit_mismatch_fails() {
+        let home = tempdir().expect("tempdir");
+        let layout = layout_for(home.path());
+        let path = layout.bin_dir.join("setuid-tool");
+        fs::create_dir_all(&layout.bin_dir).expect("mkdir");
+        fs::write(&path, "x").expect("write");
+        let mut perms = fs::metadata(&path).expect("stat").permissions();
+        perms.set_mode(0o4755);
+        fs::set_permissions(&path, perms).expect("chmod");
+        // The low 9 bits alone would pass here; the declared special bits
+        // must still be compared and fail the check.
+        let out = run_check(
+            &CheckSpec::FileExists {
+                path: path.display().to_string(),
+                mode: Some("0755".to_string()),
+                owner: None,
+            },
+            &CheckEnv {
+                layout: &layout,
+                dry_run: false,
+                service_probes: None,
+            },
+        );
+        assert_eq!(out.status, CheckStatus::Failed);
+        assert!(
+            out.detail
+                .as_deref()
+                .unwrap_or("")
+                .contains("4755 != expected 0755")
+        );
     }
 
     #[test]
