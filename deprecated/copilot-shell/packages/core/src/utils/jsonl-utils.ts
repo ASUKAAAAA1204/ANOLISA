@@ -42,7 +42,33 @@ function getFileLock(filePath: string): Mutex {
 }
 
 /**
- * Reads the first N lines from a JSONL file efficiently.
+ * Upper bound on invalid (unparsable, non-empty) lines skipped per read call.
+ * Torn trailing records are normal after a crash, but a file made of garbage
+ * must not turn the bounded "first N records" read into an unbounded scan.
+ */
+const MAX_SKIPPED_LINES = 64;
+
+/**
+ * Emits one bounded warning per read call; never includes record content.
+ */
+function warnAboutSkippedLines(
+  filePath: string,
+  invalidCount: number,
+  firstInvalidLine: number | null,
+): void {
+  if (invalidCount === 0) return;
+  const at =
+    firstInvalidLine === null ? '' : ` (first at line ${firstInvalidLine})`;
+  console.warn(
+    `[jsonl] skipped ${invalidCount} invalid line(s) in ${filePath}${at}`,
+  );
+}
+
+/**
+ * Reads the first N records from a JSONL file efficiently.
+ * Unparsable lines are skipped so a torn trailing record cannot hide the
+ * records before it; scanning for further records stops once
+ * MAX_SKIPPED_LINES invalid lines have been seen.
  * Returns an array of parsed objects.
  */
 export async function readLines<T = unknown>(
@@ -57,14 +83,24 @@ export async function readLines<T = unknown>(
     });
 
     const results: T[] = [];
+    let invalidCount = 0;
+    let firstInvalidLine: number | null = null;
+    let lineNumber = 0;
     for await (const line of rl) {
+      lineNumber++;
       if (results.length >= count) break;
       const trimmed = line.trim();
-      if (trimmed.length > 0) {
+      if (trimmed.length === 0) continue;
+      try {
         results.push(JSON.parse(trimmed) as T);
+      } catch {
+        if (firstInvalidLine === null) firstInvalidLine = lineNumber;
+        invalidCount++;
+        if (invalidCount >= MAX_SKIPPED_LINES) break;
       }
     }
 
+    warnAboutSkippedLines(filePath, invalidCount, firstInvalidLine);
     return results;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -78,7 +114,8 @@ export async function readLines<T = unknown>(
 }
 
 /**
- * Reads all lines from a JSONL file.
+ * Reads all records from a JSONL file.
+ * Unparsable lines are skipped; the records that do parse are returned.
  * Returns an array of parsed objects.
  */
 export async function read<T = unknown>(filePath: string): Promise<T[]> {
@@ -90,13 +127,22 @@ export async function read<T = unknown>(filePath: string): Promise<T[]> {
     });
 
     const results: T[] = [];
+    let invalidCount = 0;
+    let firstInvalidLine: number | null = null;
+    let lineNumber = 0;
     for await (const line of rl) {
+      lineNumber++;
       const trimmed = line.trim();
-      if (trimmed.length > 0) {
+      if (trimmed.length === 0) continue;
+      try {
         results.push(JSON.parse(trimmed) as T);
+      } catch {
+        if (firstInvalidLine === null) firstInvalidLine = lineNumber;
+        invalidCount++;
       }
     }
 
+    warnAboutSkippedLines(filePath, invalidCount, firstInvalidLine);
     return results;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
