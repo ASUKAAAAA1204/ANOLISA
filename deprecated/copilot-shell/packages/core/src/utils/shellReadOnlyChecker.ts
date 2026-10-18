@@ -95,15 +95,18 @@ const BLOCKED_GIT_BRANCH_FLAGS = new Set([
   '--copy',
 ]);
 
-const BLOCKED_GIT_BRANCH_PREFIXES = ['--set-upstream-to'];
+const BLOCKED_GIT_BRANCH_PREFIXES = ['--set-upstream-to', '--unset-upstream'];
 
 // `--output` on otherwise read-only git subcommands writes a file.
 const BLOCKED_GIT_OUTPUT_FLAGS = ['--output'];
 
 const BLOCKED_SED_PREFIXES = ['-i'];
 
-const BLOCKED_SORT_PREFIXES = ['-o'];
-const BLOCKED_SORT_FLAGS = new Set(['--output']);
+// `env -S` / `--split-string` embed the command to run inside the option
+// value; GNU env still executes it, so every spelling is rejected.
+const BLOCKED_ENV_SPLIT_PREFIXES = ['-S', '--split-string'];
+// `env -u NAME` / `--unset NAME` only drop a var from the printed env.
+const ENV_VALUE_FLAGS = new Set(['-u', '--unset']);
 
 // uniq options whose value may follow as a separate token.
 const UNIQ_VALUE_FLAGS = new Set([
@@ -277,6 +280,12 @@ function evaluateGitBranchArgs(args: string[]): boolean {
     if (BLOCKED_GIT_BRANCH_PREFIXES.some((prefix) => arg.startsWith(prefix))) {
       return false;
     }
+    // `-u` sets upstream; the exact token is in the flags set, but the
+    // attached-value spelling `-uorigin/main` and clusters beginning with
+    // it are equivalent and must also be rejected.
+    if (/^-u/.test(arg)) {
+      return false;
+    }
   }
   return true;
 }
@@ -290,9 +299,31 @@ function hasGitOutputFlag(args: string[]): boolean {
 }
 
 function evaluateEnvCommand(args: string[]): boolean {
-  for (const token of args) {
+  let sawDoubleDash = false;
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index]!;
+    if (sawDoubleDash) {
+      // Everything after `--` is the command env executes.
+      return false;
+    }
+    if (token === '--') {
+      sawDoubleDash = true;
+      continue;
+    }
+    // `env -S"touch marker"` / `env --split-string="touch marker"` carry
+    // the whole command inside a token that starts with `-`; the generic
+    // option skip below would wave it through, so reject every spelling.
+    if (BLOCKED_ENV_SPLIT_PREFIXES.some((prefix) => token.startsWith(prefix))) {
+      return false;
+    }
     // `env VAR=value` still only prints the environment.
     if (ENV_ASSIGNMENT_REGEX.test(token)) {
+      continue;
+    }
+    // `-u NAME` / `--unset NAME` drop a var and print the env; consume the
+    // operand so NAME is not mistaken for a command to run.
+    if (ENV_VALUE_FLAGS.has(token)) {
+      index++;
       continue;
     }
     if (token.startsWith('-')) {
@@ -306,10 +337,17 @@ function evaluateEnvCommand(args: string[]): boolean {
 
 function evaluateSortCommand(args: string[]): boolean {
   for (const token of args) {
-    if (
-      BLOCKED_SORT_PREFIXES.some((prefix) => token.startsWith(prefix)) ||
-      BLOCKED_SORT_FLAGS.has(token)
-    ) {
+    if (token === '--') {
+      // Remaining tokens are input files; sort never writes them.
+      break;
+    }
+    // `--output FILE` and `--output=FILE` both write.
+    if (token === '--output' || token.startsWith('--output=')) {
+      return false;
+    }
+    // Short `-o` and any cluster containing it (`-no`, `-ro`, `-oFILE`)
+    // take the following token (or the attached tail) as the output file.
+    if (/^-(?!-)[^-]*o/.test(token)) {
       return false;
     }
   }
@@ -318,8 +356,23 @@ function evaluateSortCommand(args: string[]): boolean {
 
 function evaluateUniqCommand(args: string[]): boolean {
   let operands = 0;
+  let sawDoubleDash = false;
   for (let index = 0; index < args.length; index++) {
     const token = args[index]!;
+    if (sawDoubleDash) {
+      // After `--` every token is an operand, even `-input.txt`.
+      operands++;
+      continue;
+    }
+    if (token === '--') {
+      sawDoubleDash = true;
+      continue;
+    }
+    // A standalone `-` is the stdin input operand, not a flag.
+    if (token === '-') {
+      operands++;
+      continue;
+    }
     if (token.startsWith('-')) {
       if (UNIQ_VALUE_FLAGS.has(token)) {
         index++; // skip the option's separate value

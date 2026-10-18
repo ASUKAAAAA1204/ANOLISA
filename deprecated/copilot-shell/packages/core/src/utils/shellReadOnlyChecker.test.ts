@@ -248,6 +248,20 @@ describe('evaluateShellCommandReadOnly', () => {
       expect(isShellCommandReadOnly('env')).toBe(true);
       expect(isShellCommandReadOnly('env FOO=bar')).toBe(true);
       expect(isShellCommandReadOnly('env -i FOO=bar')).toBe(true);
+      // `-u NAME` only drops a var from the printed environment.
+      expect(isShellCommandReadOnly('env -u FOO')).toBe(true);
+      expect(isShellCommandReadOnly('env --unset FOO')).toBe(true);
+    });
+
+    it('rejects env options that carry the command to execute', () => {
+      // The whole command lives inside a token starting with `-`.
+      expect(isShellCommandReadOnly('env --split-string="touch marker"')).toBe(
+        false,
+      );
+      expect(isShellCommandReadOnly('env -S"touch marker"')).toBe(false);
+      expect(isShellCommandReadOnly('env -S touch marker')).toBe(false);
+      // `-u` does not shield a following command either.
+      expect(isShellCommandReadOnly('env -u FOO touch marker')).toBe(false);
     });
 
     it('rejects git read subcommands writing via --output', () => {
@@ -271,6 +285,11 @@ describe('evaluateShellCommandReadOnly', () => {
       expect(isShellCommandReadOnly('sort --output out.txt in.txt')).toBe(
         false,
       );
+      // attached long value and short cluster containing `o`.
+      expect(isShellCommandReadOnly('sort --output=out.txt input.txt')).toBe(
+        false,
+      );
+      expect(isShellCommandReadOnly('sort -no out.txt input.txt')).toBe(false);
     });
 
     it('keeps plain sort read-only', () => {
@@ -280,6 +299,10 @@ describe('evaluateShellCommandReadOnly', () => {
 
     it('rejects uniq with an output operand', () => {
       expect(isShellCommandReadOnly('uniq input.txt output.txt')).toBe(false);
+      // standalone `-` is the stdin input operand, so OUT still writes.
+      expect(isShellCommandReadOnly('uniq - out.txt')).toBe(false);
+      // operands after `--` count even when they begin with a dash.
+      expect(isShellCommandReadOnly('uniq -- -input.txt out.txt')).toBe(false);
     });
 
     it('keeps uniq read-only with at most one operand', () => {
@@ -310,6 +333,9 @@ describe('evaluateShellCommandReadOnly', () => {
       expect(
         isShellCommandReadOnly('git branch --set-upstream-to=origin/main'),
       ).toBe(false);
+      // attached-value short spelling of `-u`.
+      expect(isShellCommandReadOnly('git branch -uorigin/main')).toBe(false);
+      expect(isShellCommandReadOnly('git branch --unset-upstream')).toBe(false);
     });
 
     it('keeps read-only git branch listing allowed', () => {
