@@ -129,12 +129,16 @@ class AddColumnRowOrderTest(unittest.TestCase):
         # Tail-insert branch of the helper: a batch of ascending inserts
         # (rows 2:5 over an existing row 1) must hit the fast path on
         # every iteration — with n growing per insert — and land at the
-        # tail in order.
+        # tail in order. The total row below the span (the documented
+        # --formula-rows 2:9 --total-row 10 shape) covers the second
+        # call site on the same fast path.
         self._write(self.sheet_path, sheet_xml([1]))
         self.run_script("--formula", "=A{row}+B{row}",
-                        "--formula-rows", "2:5")
-        self.assertEqual(self.row_numbers(), [1, 2, 3, 4, 5])
-        for ref in ("C2", "C3", "C4", "C5"):
+                        "--formula-rows", "2:5",
+                        "--total-row", "6", "--total-formula",
+                        "=SUM(C2:C5)")
+        self.assertEqual(self.row_numbers(), [1, 2, 3, 4, 5, 6])
+        for ref in ("C2", "C3", "C4", "C5", "C6"):
             self.assertIn(ref, self.cell_refs())
 
     def test_new_row_before_all_existing_rows(self):
