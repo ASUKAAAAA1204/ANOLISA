@@ -230,5 +230,92 @@ describe('evaluateShellCommandReadOnly', () => {
         isShellCommandReadOnly("sed --in-place 's/foo/bar/' file.txt"),
       ).toBe(false);
     });
+
+    it('rejects sed --in-place long form with suffix', () => {
+      expect(
+        isShellCommandReadOnly("sed --in-place=.bak 's/foo/bar/' file.txt"),
+      ).toBe(false);
+    });
+  });
+
+  describe('mutating invocations of nominally read-only commands', () => {
+    it('rejects env with a command operand', () => {
+      expect(isShellCommandReadOnly('env rm -rf /tmp/scratch')).toBe(false);
+      expect(isShellCommandReadOnly('env node script.js')).toBe(false);
+    });
+
+    it('keeps env read-only without a command operand', () => {
+      expect(isShellCommandReadOnly('env')).toBe(true);
+      expect(isShellCommandReadOnly('env FOO=bar')).toBe(true);
+      expect(isShellCommandReadOnly('env -i FOO=bar')).toBe(true);
+    });
+
+    it('rejects git read subcommands writing via --output', () => {
+      expect(isShellCommandReadOnly('git log --output=/tmp/log.txt')).toBe(
+        false,
+      );
+      expect(isShellCommandReadOnly('git diff --output /tmp/diff.txt')).toBe(
+        false,
+      );
+    });
+
+    it('keeps git read subcommands read-only without --output', () => {
+      expect(isShellCommandReadOnly('git log --oneline')).toBe(true);
+      expect(isShellCommandReadOnly('git diff HEAD~1')).toBe(true);
+    });
+
+    it('rejects sort writing via -o/--output', () => {
+      expect(isShellCommandReadOnly('sort -o /tmp/sorted.txt input.txt')).toBe(
+        false,
+      );
+      expect(isShellCommandReadOnly('sort --output out.txt in.txt')).toBe(
+        false,
+      );
+    });
+
+    it('keeps plain sort read-only', () => {
+      expect(isShellCommandReadOnly('sort input.txt')).toBe(true);
+      expect(isShellCommandReadOnly('sort -n input.txt')).toBe(true);
+    });
+
+    it('rejects uniq with an output operand', () => {
+      expect(isShellCommandReadOnly('uniq input.txt output.txt')).toBe(false);
+    });
+
+    it('keeps uniq read-only with at most one operand', () => {
+      expect(isShellCommandReadOnly('uniq input.txt')).toBe(true);
+      expect(isShellCommandReadOnly('uniq -c input.txt')).toBe(true);
+      expect(isShellCommandReadOnly('uniq -f 2 input.txt')).toBe(true);
+    });
+
+    it('rejects rg flags that execute external programs', () => {
+      expect(isShellCommandReadOnly('rg --pre ./evil.sh pattern')).toBe(false);
+      expect(isShellCommandReadOnly('rg --hostname-bin /bin/echo x')).toBe(
+        false,
+      );
+    });
+
+    it('keeps plain rg read-only', () => {
+      expect(isShellCommandReadOnly('rg pattern')).toBe(true);
+      expect(isShellCommandReadOnly('rg --pcre2 pattern')).toBe(true);
+    });
+
+    it('rejects mutating git branch flags', () => {
+      expect(isShellCommandReadOnly('git branch -M old new')).toBe(false);
+      expect(isShellCommandReadOnly('git branch -c src dst')).toBe(false);
+      expect(isShellCommandReadOnly('git branch -C src dst')).toBe(false);
+      expect(isShellCommandReadOnly('git branch -u upstream topic')).toBe(
+        false,
+      );
+      expect(
+        isShellCommandReadOnly('git branch --set-upstream-to=origin/main'),
+      ).toBe(false);
+    });
+
+    it('keeps read-only git branch listing allowed', () => {
+      expect(isShellCommandReadOnly('git branch')).toBe(true);
+      expect(isShellCommandReadOnly('git branch --list')).toBe(true);
+      expect(isShellCommandReadOnly('git branch --show-current')).toBe(true);
+    });
   });
 });

@@ -88,9 +88,35 @@ const BLOCKED_GIT_BRANCH_FLAGS = new Set([
   '--delete',
   '--move',
   '-m',
+  '-M',
+  '-c',
+  '-C',
+  '-u',
+  '--copy',
 ]);
 
+const BLOCKED_GIT_BRANCH_PREFIXES = ['--set-upstream-to'];
+
+// `--output` on otherwise read-only git subcommands writes a file.
+const BLOCKED_GIT_OUTPUT_FLAGS = ['--output'];
+
 const BLOCKED_SED_PREFIXES = ['-i'];
+
+const BLOCKED_SORT_PREFIXES = ['-o'];
+const BLOCKED_SORT_FLAGS = new Set(['--output']);
+
+// uniq options whose value may follow as a separate token.
+const UNIQ_VALUE_FLAGS = new Set([
+  '-f',
+  '-s',
+  '-w',
+  '--skip-fields',
+  '--skip-chars',
+  '--check-chars',
+]);
+
+// rg flags that execute an external program.
+const BLOCKED_RG_FLAGS = ['--pre', '--hostname-bin'];
 
 // AWK side-effect patterns that can execute commands or write files
 const AWK_SIDE_EFFECT_PATTERNS = [
@@ -201,7 +227,7 @@ function evaluateSedCommand(tokens: string[]): boolean {
   for (const token of rest) {
     if (
       BLOCKED_SED_PREFIXES.some((prefix) => token.startsWith(prefix)) ||
-      token === '--in-place'
+      token.startsWith('--in-place')
     ) {
       return false;
     }
@@ -248,6 +274,72 @@ function evaluateGitBranchArgs(args: string[]): boolean {
     if (BLOCKED_GIT_BRANCH_FLAGS.has(arg)) {
       return false;
     }
+    if (BLOCKED_GIT_BRANCH_PREFIXES.some((prefix) => arg.startsWith(prefix))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function hasGitOutputFlag(args: string[]): boolean {
+  return args.some(
+    (arg) =>
+      BLOCKED_GIT_OUTPUT_FLAGS.includes(arg) ||
+      BLOCKED_GIT_OUTPUT_FLAGS.some((flag) => arg.startsWith(`${flag}=`)),
+  );
+}
+
+function evaluateEnvCommand(args: string[]): boolean {
+  for (const token of args) {
+    // `env VAR=value` still only prints the environment.
+    if (ENV_ASSIGNMENT_REGEX.test(token)) {
+      continue;
+    }
+    if (token.startsWith('-')) {
+      continue;
+    }
+    // Anything else is a command operand: env executes it.
+    return false;
+  }
+  return true;
+}
+
+function evaluateSortCommand(args: string[]): boolean {
+  for (const token of args) {
+    if (
+      BLOCKED_SORT_PREFIXES.some((prefix) => token.startsWith(prefix)) ||
+      BLOCKED_SORT_FLAGS.has(token)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function evaluateUniqCommand(args: string[]): boolean {
+  let operands = 0;
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index]!;
+    if (token.startsWith('-')) {
+      if (UNIQ_VALUE_FLAGS.has(token)) {
+        index++; // skip the option's separate value
+      }
+      continue;
+    }
+    operands++;
+  }
+  // `uniq IN OUT` writes the second operand.
+  return operands <= 1;
+}
+
+function evaluateRgCommand(args: string[]): boolean {
+  for (const token of args) {
+    if (
+      BLOCKED_RG_FLAGS.includes(token) ||
+      BLOCKED_RG_FLAGS.some((flag) => token.startsWith(`${flag}=`))
+    ) {
+      return false;
+    }
   }
   return true;
 }
@@ -272,6 +364,10 @@ function evaluateGitCommand(tokens: string[]): boolean {
   }
 
   const args = tokens.slice(index + 1);
+
+  if (hasGitOutputFlag(args)) {
+    return false;
+  }
 
   if (subcommand === 'remote') {
     return evaluateGitRemoteArgs(args);
@@ -319,6 +415,22 @@ function evaluateShellSegment(segment: string): boolean {
 
   if (normalizedRoot === 'find') {
     return evaluateFindCommand([normalizedRoot, ...args]);
+  }
+
+  if (normalizedRoot === 'env') {
+    return evaluateEnvCommand(args);
+  }
+
+  if (normalizedRoot === 'sort') {
+    return evaluateSortCommand(args);
+  }
+
+  if (normalizedRoot === 'uniq') {
+    return evaluateUniqCommand(args);
+  }
+
+  if (normalizedRoot === 'rg' || normalizedRoot === 'ripgrep') {
+    return evaluateRgCommand(args);
   }
 
   if (normalizedRoot === 'sed') {
